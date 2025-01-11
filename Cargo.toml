@@ -14,6 +14,8 @@ alacritty_terminal = { git = "https://github.com/alacritty/alacritty", rev = "ca
 env_logger = "0.10"
 hex_color = { version = "3", features = ["serde"] }
 indexmap = "2"
+#TODO: for repeat_n, which is in std in 1.82
+itertools = "0.13"
 lazy_static = "1"
 log = "0.4"
 open = "5.0.2"
@@ -38,7 +40,6 @@ url = "2.5"
 [dependencies.cosmic-files]
 git = "https://github.com/pop-os/cosmic-files.git"
 default-features = false
-features = ["winit"]
 
 [dependencies.cosmic-text]
 git = "https://github.com/pop-os/cosmic-text.git"
@@ -48,10 +49,6 @@ features = ["monospace_fallback", "shape-run-cache"]
 git = "https://github.com/pop-os/libcosmic.git"
 default-features = false
 features = ["a11y", "multi-window", "tokio", "winit"]
-
-[dependencies.smol_str]
-version = "0.2.1"
-features = ["serde"]
 
 [target.'cfg(unix)'.dependencies]
 fork = "0.1"
@@ -64,14 +61,7 @@ wgpu = ["libcosmic/wgpu", "cosmic-files/wgpu"]
 inherits = "release"
 debug = true
 
-[patch.crates-io]
-# https://github.com/alexcrichton/filetime/pull/104
-filetime = { git = "https://github.com/jackpot51/filetime" }
-
 # [patch.'https://github.com/pop-os/libcosmic']
-# libcosmic = { git = "https://github.com/pop-os/libcosmic//", branch = "zbus-4" }
-# cosmic-config = { git = "https://github.com/pop-os/libcosmic//", branch = "zbus-4" }
-# cosmic-theme = { git = "https://github.com/pop-os/libcosmic//", branch = "zbus-4" }
 # libcosmic = { path = "../libcosmic" }
 # cosmic-config = { path = "../libcosmic/cosmic-config" }
 # cosmic-theme = { path = "../libcosmic/cosmic-theme" }

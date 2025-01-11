@@ -24,7 +24,7 @@ use cosmic::{
         text::Renderer as _,
         widget::{
             self,
-            operation::{self, Operation, OperationOutputWrapper},
+            operation::{self, Operation},
             tree, Id, Widget,
         },
         Border, Shell,
@@ -50,6 +50,7 @@ pub struct TerminalBox<'a, Message> {
     id: Option<Id>,
     border: Border,
     padding: Padding,
+    show_headerbar: bool,
     click_timing: Duration,
     context_menu: Option<Point>,
     on_context_menu: Option<Box<dyn Fn(Option<Point>) -> Message + 'a>>,
@@ -57,6 +58,7 @@ pub struct TerminalBox<'a, Message> {
     opacity: Option<f32>,
     mouse_inside_boundary: Option<bool>,
     on_middle_click: Option<Box<dyn Fn() -> Message + 'a>>,
+    on_open_hyperlink: Option<Box<dyn Fn(String) -> Message + 'a>>,
     key_binds: HashMap<KeyBind, Action>,
 }
 
@@ -70,6 +72,7 @@ where
             id: None,
             border: Border::default(),
             padding: Padding::new(0.0),
+            show_headerbar: true,
             click_timing: Duration::from_millis(500),
             context_menu: None,
             on_context_menu: None,
@@ -78,6 +81,7 @@ where
             mouse_inside_boundary: None,
             on_middle_click: None,
             key_binds: key_binds(),
+            on_open_hyperlink: None,
         }
     }
 
@@ -93,6 +97,11 @@ where
 
     pub fn padding<P: Into<Padding>>(mut self, padding: P) -> Self {
         self.padding = padding.into();
+        self
+    }
+
+    pub fn show_headerbar(mut self, show_headerbar: bool) -> Self {
+        self.show_headerbar = show_headerbar;
         self
     }
 
@@ -126,6 +135,14 @@ where
 
     pub fn opacity(mut self, opacity: f32) -> Self {
         self.opacity = Some(opacity);
+        self
+    }
+
+    pub fn on_open_hyperlink(
+        mut self,
+        on_open_hyperlink: Option<Box<dyn Fn(String) -> Message + 'a>>,
+    ) -> Self {
+        self.on_open_hyperlink = on_open_hyperlink;
         self
     }
 }
@@ -192,7 +209,7 @@ where
         tree: &mut widget::Tree,
         _layout: Layout<'_>,
         _renderer: &Renderer,
-        operation: &mut dyn Operation<OperationOutputWrapper<Message>>,
+        operation: &mut dyn Operation,
     ) {
         let state = tree.state.downcast_mut::<State>();
 
@@ -224,6 +241,19 @@ where
                 && y >= 0.0
                 && y < buffer_size.1.unwrap_or(0.0)
             {
+                let col = x / terminal.size().cell_width;
+                let row = y / terminal.size().cell_height;
+
+                let location = terminal
+                    .viewport_to_point(TermPoint::new(row as usize, TermColumn(col as usize)));
+                if let Some(_) = terminal
+                    .regex_matches
+                    .iter()
+                    .find(|bounds| bounds.contains(&location))
+                {
+                    return mouse::Interaction::Pointer;
+                }
+
                 return mouse::Interaction::Text;
             }
         }
@@ -246,6 +276,7 @@ where
         let state = tree.state.downcast_ref::<State>();
 
         let cosmic_theme = theme.cosmic();
+        let radius_s = cosmic_theme.corner_radii.radius_s[0] - 1.0;
         let scrollbar_w = f32::from(cosmic_theme.spacing.space_xxs);
 
         let view_position = layout.position() + [self.padding.left, self.padding.top].into();
@@ -279,7 +310,15 @@ where
             renderer.fill_quad(
                 Quad {
                     bounds: layout.bounds(),
-                    border: self.border,
+                    border: Border {
+                        radius: if self.show_headerbar {
+                            [0.0, 0.0, radius_s, radius_s].into()
+                        } else {
+                            [radius_s, radius_s, radius_s, radius_s].into()
+                        },
+                        width: self.border.width,
+                        color: self.border.color,
+                    },
                     ..Default::default()
                 },
                 Color::new(
@@ -655,6 +694,7 @@ where
             Event::Keyboard(KeyEvent::KeyPressed {
                 key: Key::Named(named),
                 modifiers,
+                text,
                 ..
             }) if state.is_focused => {
                 for key_bind in self.key_binds.keys() {
@@ -778,11 +818,15 @@ where
                         status = Status::Captured;
                     }
                     Named::Space => {
+                        // Keep this instead of hardcoding the space to allow for dead keys
+                        let character = text.and_then(|c| c.chars().next()).unwrap_or_default();
+
                         if modifiers.control() {
                             // Send NUL character (\x00) for Ctrl + Space
                             terminal.input_scroll(b"\x00".to_vec());
                         } else {
-                            terminal.input_scroll(format!("{}{}", alt_prefix, " ").into_bytes());
+                            terminal
+                                .input_scroll(format!("{}{}", alt_prefix, character).into_bytes());
                         }
                         status = Status::Captured;
                     }
@@ -987,6 +1031,22 @@ where
                     //TODO: better calculation of position
                     let col = x / terminal.size().cell_width;
                     let row = y / terminal.size().cell_height;
+
+                    let location = terminal
+                        .viewport_to_point(TermPoint::new(row as usize, TermColumn(col as usize)));
+                    if let Some(on_open_hyperlink) = &self.on_open_hyperlink {
+                        if let Some(match_) = terminal
+                            .regex_matches
+                            .iter()
+                            .find(|bounds| bounds.contains(&location))
+                        {
+                            let term = terminal.term.lock();
+                            let hyperlink = term.bounds_to_string(*match_.start(), *match_.end());
+                            shell.publish(on_open_hyperlink(hyperlink));
+                            status = Status::Captured;
+                        }
+                    }
+
                     if is_mouse_mode {
                         terminal.report_mouse(event, &state.modifiers, col as u32, row as u32);
                     } else {
@@ -1028,6 +1088,10 @@ where
                     //TODO: better calculation of position
                     let col = x / terminal.size().cell_width;
                     let row = y / terminal.size().cell_height;
+                    let location = terminal
+                        .viewport_to_point(TermPoint::new(row as usize, TermColumn(col as usize)));
+                    update_active_regex_match(&mut terminal, location);
+
                     if is_mouse_mode {
                         terminal.report_mouse(event, &state.modifiers, col as u32, row as u32);
                     } else {
@@ -1106,12 +1170,49 @@ where
                             }
                         }
                     }
+                    {
+                        let x = p.x - self.padding.left;
+                        let y = p.y - self.padding.top;
+                        //TODO: better calculation of position
+                        let col = x / terminal.size().cell_width;
+                        let row = y / terminal.size().cell_height;
+
+                        let location = terminal.viewport_to_point(TermPoint::new(
+                            row as usize,
+                            TermColumn(col as usize),
+                        ));
+                        update_active_regex_match(&mut terminal, location);
+                    }
                 }
             }
             _ => (),
         }
 
         status
+    }
+}
+
+fn update_active_regex_match(
+    terminal: &mut std::sync::MutexGuard<'_, Terminal>,
+    location: TermPoint,
+) {
+    if let Some(match_) = terminal
+        .regex_matches
+        .iter()
+        .find(|bounds| bounds.contains(&location))
+    {
+        'update: {
+            if let Some(active_match) = &terminal.active_regex_match {
+                if active_match == match_ {
+                    break 'update;
+                }
+            }
+            terminal.active_regex_match = Some(match_.clone());
+            terminal.needs_update = true;
+        }
+    } else if terminal.active_regex_match.is_some() {
+        terminal.active_regex_match = None;
+        terminal.needs_update = true;
     }
 }
 
